@@ -1,0 +1,20 @@
+/*
+ * Local-only master-key configuration.
+ *
+ * Enter four NEC values in order, using eight hexadecimal digits per value.
+ * Do not include the "NEC-" prefix.  The ON and OFF commands are not valid
+ * master-key values; use only the four function buttons and twelve color
+ * buttons.
+ *
+ * Copy this file to master_key.h and edit that ignored file.  Never commit
+ * the edited file.
+ */
+#ifndef AD00020_MASTER_KEY_H
+#define AD00020_MASTER_KEY_H
+
+#define AD00020_MASTER_KEY_01 "REPLACE_ME"
+#define AD00020_MASTER_KEY_02 "REPLACE_ME"
+#define AD00020_MASTER_KEY_03 "REPLACE_ME"
+#define AD00020_MASTER_KEY_04 "REPLACE_ME"
+
+#endif /* AD00020_MASTER_KEY_H */

@@ -1,0 +1,21 @@
+# Build output
+build/
+bin/
+dist/
+
+# Local secrets and provisioning data
+.env
+.env.*
+secrets/
+provisioning/
+*.secret
+*.secrets
+include/credentials.h
+include/credentials.local.h
+include/master_key.h
+include/generated_database.h
+__pycache__/
+
+# Editor and OS files
+.DS_Store
+.vscode/
