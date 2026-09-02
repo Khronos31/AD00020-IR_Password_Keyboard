@@ -49,3 +49,7 @@ python3 tools/provision_db.py
 生成される`include/generated_database.h`には、IVと暗号文だけが入ります。AES鍵は、ASCIIドメイン`ADPK-MASTER-KEY-V2`、フレーム数1バイト、受信した4バイトNEC値列を、公開KDF鍵（`ADPK-KDF-V2`の後ろにNUL 5バイト）によるAES-CMACへ入力し、その16バイトを使って実行時にRAM上で作られます。入力列と導出鍵は生成物へ保存されません。実機へ書き込む前には、必ず自分の認証情報とマスターキーで再プロビジョニングしてからビルドしてください。
 
 Mode受信で入力モードに入り、最大32個の有効な標準NECフレームを記録します。ONで解除を試行し、OFFはどの状態でも即時ロックします。入力モードと解除後の無操作タイムアウトは180秒です。解除後の12個のslotコードは、設定済みパスワードとEnterを出力してもロックせず、次の操作を受け付けます。
+
+## License
+
+このプロジェクト用に作成したファイルはMIT Licenseです。`src/Microchip/`のUSBスタックと`src/crypto/aes.c`／`aes.h`は第三者コードであり、MIT Licenseの対象外です。個別の条件は[LICENSE](LICENSE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を確認してください。

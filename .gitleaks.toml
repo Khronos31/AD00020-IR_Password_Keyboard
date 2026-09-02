@@ -1,0 +1,11 @@
+title = "ADPK secret scanning configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public NIST AES-128-ECB test vector retained in third-party tiny-AES-C source"
+regexTarget = "match"
+regexes = [
+  '''(?i)2b7e151628aed2a6abf7158809cf4f3c''',
+]

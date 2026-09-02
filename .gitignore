@@ -2,6 +2,16 @@
 build/
 bin/
 dist/
+*.hex
+*.map
+*.cof
+*.elf
+*.o
+*.obj
+*.lst
+*.p1
+*.pyc
+*.log
 
 # Local secrets and provisioning data
 .env
@@ -15,6 +25,8 @@ include/credentials.local.h
 include/master_key.h
 include/generated_database.h
 __pycache__/
+.pytest_cache/
+.mypy_cache/
 
 # Editor and OS files
 .DS_Store
