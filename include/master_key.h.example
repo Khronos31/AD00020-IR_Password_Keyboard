@@ -1,10 +1,11 @@
 /*
  * Local-only master-key configuration.
  *
- * Enter four NEC values in order, using eight hexadecimal digits per value.
- * Do not include the "NEC-" prefix.  The ON and OFF commands are not valid
- * master-key values; use only the four function buttons and twelve color
- * buttons.
+ * Set an explicit frame count from 0 through 32, then enter that many
+ * standard NEC values in order, using eight hexadecimal digits per value.
+ * Do not include the "NEC-" prefix.  Mode, ON, and OFF are reserved control
+ * commands and cannot be used as master-key material.  Any other valid
+ * standard NEC frame is accepted, including frames from another remote.
  *
  * Copy this file to master_key.h and edit that ignored file.  Never commit
  * the edited file.
@@ -12,9 +13,11 @@
 #ifndef AD00020_MASTER_KEY_H
 #define AD00020_MASTER_KEY_H
 
-#define AD00020_MASTER_KEY_01 "REPLACE_ME"
-#define AD00020_MASTER_KEY_02 "REPLACE_ME"
-#define AD00020_MASTER_KEY_03 "REPLACE_ME"
-#define AD00020_MASTER_KEY_04 "REPLACE_ME"
+#define AD00020_MASTER_KEY_COUNT 4
+
+#define AD00020_MASTER_KEY_01 "01FE807F"
+#define AD00020_MASTER_KEY_02 "01FE40BF"
+#define AD00020_MASTER_KEY_03 "A55A12ED"
+#define AD00020_MASTER_KEY_04 "10EF55AA"
 
 #endif /* AD00020_MASTER_KEY_H */

@@ -7,6 +7,7 @@
 #include "HardwareProfile.h"
 #include "USB/usb_function_hid.h"
 #include "crypto/aes.h"
+#include "crypto/cmac.h"
 #include "generated_database.h"
 
 /* PIC18F14K50 USB needs the 48 MHz PLL clock. */
@@ -44,12 +45,14 @@
 #define RAW_MAX_PULSES           100        /* NEC frame plus terminating gap */
 #define RAW_BUFFER_BANK_SIZE     50
 #define MASTER_KEY_SIZE          16
-#define UNLOCK_FRAME_COUNT       4
-#define UNLOCK_TIMEOUT_SECONDS   30
+#define MAX_MASTER_KEY_FRAMES    32
+/* Standard NEC stores each byte's inverse, so two bytes per frame are enough
+ * to reconstruct the exact four-byte decoded frame for the KDF. */
+#define MASTER_KEY_MATERIAL_SIZE (MAX_MASTER_KEY_FRAMES * 2u)
 #define AUTO_LOCK_SECONDS        180
 #define PASSWORD_BUFFER_SIZE     64
-#define FUNCTION_CODE_COUNT      4
 #define PASSWORD_CODE_COUNT      12
+#define STATUS_LED_LAT            LATCbits.LATC5
 
 /* The USB stack requires endpoint buffers in the USB dual-port RAM. */
 #pragma udata usbram2
@@ -71,10 +74,26 @@ typedef union
     struct AES_ctx aes_context;
 } WORKSPACE;
 
+typedef union
+{
+    BYTE unlock_frames[MASTER_KEY_MATERIAL_SIZE];
+    struct
+    {
+        BYTE aes_scratch[16];
+        BYTE database_header[ADPK_DB_HEADER_SIZE];
+        BYTE password_buffer[PASSWORD_BUFFER_SIZE];
+    } unlocked;
+} SENSITIVE_MEMORY;
+
 static WORKSPACE workspace;
+static SENSITIVE_MEMORY sensitive_memory;
 #define raw_buffer0 workspace.capture.raw_buffer0
 #define raw_buffer1 workspace.capture.raw_buffer1
 #define aes_context workspace.aes_context
+#define unlock_frames sensitive_memory.unlock_frames
+#define aes_scratch sensitive_memory.unlocked.aes_scratch
+#define database_header sensitive_memory.unlocked.database_header
+#define password_buffer sensitive_memory.unlocked.password_buffer
 
 static volatile BYTE raw_count;
 static volatile BYTE raw_ready;
@@ -95,16 +114,10 @@ typedef enum
 } DEVICE_STATE;
 
 static DEVICE_STATE device_state;
-static BYTE unlock_frames[MASTER_KEY_SIZE];
 static BYTE unlock_frame_count;
 static BYTE master_key[MASTER_KEY_SIZE];
 static BYTE active_slot_count;
-static BYTE unlock_elapsed_seconds;
 static BYTE idle_seconds;
-
-static BYTE aes_scratch[16];
-static BYTE database_header[ADPK_DB_HEADER_SIZE];
-static BYTE password_buffer[PASSWORD_BUFFER_SIZE];
 
 static BYTE output_active;
 static BYTE output_index;
@@ -113,15 +126,9 @@ static BYTE output_enter_sent;
 static BYTE output_finished;
 static BYTE output_cancel_release;
 
+static const BYTE code_mode[4] = {0x01, 0xFE, 0x78, 0x87};
 static const BYTE code_unlock[4] = {0x01, 0xFE, 0x48, 0xB7};
 static const BYTE code_lock[4] = {0x01, 0xFE, 0x58, 0xA7};
-static const BYTE function_codes[FUNCTION_CODE_COUNT][4] =
-{
-    {0x01, 0xFE, 0x78, 0x87},
-    {0x01, 0xFE, 0x80, 0x7F},
-    {0x01, 0xFE, 0x40, 0xBF},
-    {0x01, 0xFE, 0xC0, 0x3F}
-};
 static const BYTE password_codes[PASSWORD_CODE_COUNT][4] =
 {
     {0x01, 0xFE, 0x20, 0xDF},
@@ -149,12 +156,13 @@ static BYTE DecodeNECCode(BYTE *code);
 static BYTE PulseMatches(WORD actual, WORD target);
 static BYTE DecodedNECByte(BYTE byte_index);
 static BYTE CodeEquals(const BYTE *left, const BYTE *right);
-static BYTE IsMasterCode(const BYTE *code);
+static BYTE IsReservedCode(const BYTE *code);
 static BYTE PasswordSlotForCode(const BYTE *code);
 static void HandleReceivedCode(const BYTE *code);
 static void EnterUnlockMode(void);
 static void LockDatabase(void);
 static void TryUnlock(void);
+static void DeriveMasterKey(void);
 static BYTE ValidateDatabase(void);
 static void DecryptDatabaseRange(WORD offset, BYTE *destination, WORD length);
 static void StartPasswordOutput(BYTE slot);
@@ -162,6 +170,8 @@ static BYTE CharacterToUsage(BYTE character, BYTE *modifier, BYTE *usage);
 static void ServiceKeyboardOutput(void);
 static void AbortPasswordOutput(void);
 static void SecureZero(BYTE *buffer, WORD length);
+static void SetStatusLed(BYTE enabled);
+static void UpdateStatusLed(void);
 
 void Low_ISR(void) __interrupt(low_priority);
 void Low_ISR(void)
@@ -244,6 +254,32 @@ static void SecureZero(BYTE *buffer, WORD length)
         *target++ = 0;
 }
 
+static void SetStatusLed(BYTE enabled)
+{
+    STATUS_LED_LAT = enabled ? 1 : 0;
+}
+
+static void UpdateStatusLed(void)
+{
+    static BYTE phase;
+
+    if (device_state == STATE_UNLOCK_INPUT)
+    {
+        phase = (BYTE)!phase;
+        SetStatusLed(phase);
+    }
+    else if (device_state == STATE_UNLOCKED)
+    {
+        phase = 1;
+        SetStatusLed(1);
+    }
+    else
+    {
+        phase = 0;
+        SetStatusLed(0);
+    }
+}
+
 static void ClearKeyboardReport(void)
 {
     BYTE index;
@@ -280,7 +316,6 @@ static void UserInit(void)
     device_state = STATE_LOCKED;
     unlock_frame_count = 0;
     active_slot_count = 0;
-    unlock_elapsed_seconds = 0;
     idle_seconds = 0;
     output_active = 0;
     output_index = 0;
@@ -300,6 +335,7 @@ static void UserInit(void)
     usb_out_handle = 0;
     ClearKeyboardReport();
     keyboard_out_report[0] = 0;
+    SetStatusLed(0);
 
     /* Timer0: 16-bit, internal instruction clock, 1:8 prescaler. */
     T0CON = 0x82;
@@ -414,7 +450,7 @@ static BYTE DecodeNECCode(BYTE *code)
     BYTE bit_count = 0;
     BYTE index;
 
-    if (raw_count < 68u ||
+    if (raw_overflow || raw_count < 68u ||
         !PulseMatches(RawPulseAt(0), 90u) ||
         !PulseMatches(RawPulseAt(1), 45u))
         return 0;
@@ -456,21 +492,11 @@ static BYTE CodeEquals(const BYTE *left, const BYTE *right)
     return 1;
 }
 
-static BYTE IsMasterCode(const BYTE *code)
+static BYTE IsReservedCode(const BYTE *code)
 {
-    BYTE index;
-
-    for (index = 0; index < FUNCTION_CODE_COUNT; index++)
-    {
-        if (CodeEquals(code, function_codes[index]))
-            return 1;
-    }
-    for (index = 0; index < PASSWORD_CODE_COUNT; index++)
-    {
-        if (CodeEquals(code, password_codes[index]))
-            return 1;
-    }
-    return 0;
+    return (BYTE)(CodeEquals(code, code_mode) ||
+                  CodeEquals(code, code_unlock) ||
+                  CodeEquals(code, code_lock));
 }
 
 static BYTE PasswordSlotForCode(const BYTE *code)
@@ -507,16 +533,17 @@ static void LockDatabase(void)
     SecureZero(database_header, sizeof(database_header));
     unlock_frame_count = 0;
     active_slot_count = 0;
-    unlock_elapsed_seconds = 0;
     idle_seconds = 0;
     device_state = STATE_LOCKED;
+    SetStatusLed(0);
 }
 
 static void EnterUnlockMode(void)
 {
     LockDatabase();
     device_state = STATE_UNLOCK_INPUT;
-    unlock_elapsed_seconds = 0;
+    idle_seconds = 0;
+    SetStatusLed(1);
 }
 
 static void DecryptDatabaseRange(WORD offset, BYTE *destination, WORD length)
@@ -571,9 +598,22 @@ static BYTE ValidateDatabase(void)
     return 1;
 }
 
+static void DeriveMasterKey(void)
+{
+    /* The CMAC context shares the small workspace with IR capture buffers. */
+    crypto_active = 1;
+    capture_active = 0;
+    raw_ready = 0;
+    raw_count = 0;
+    current_ticks = 0;
+    ADPK_DeriveMasterKey(&aes_context, unlock_frames, unlock_frame_count,
+                         master_key);
+    crypto_active = 0;
+}
+
 static void TryUnlock(void)
 {
-    memcpy(master_key, unlock_frames, MASTER_KEY_SIZE);
+    DeriveMasterKey();
     SecureZero(unlock_frames, sizeof(unlock_frames));
     unlock_frame_count = 0;
 
@@ -586,6 +626,7 @@ static void TryUnlock(void)
     SecureZero(database_header, sizeof(database_header));
     device_state = STATE_UNLOCKED;
     idle_seconds = 0;
+    SetStatusLed(1);
 }
 
 static void StartPasswordOutput(BYTE slot)
@@ -627,7 +668,7 @@ static void HandleReceivedCode(const BYTE *code)
 {
     BYTE slot;
 
-    if (CodeEquals(code, code_unlock))
+    if (CodeEquals(code, code_mode))
     {
         EnterUnlockMode();
         return;
@@ -638,20 +679,29 @@ static void HandleReceivedCode(const BYTE *code)
         return;
     }
 
+    if (CodeEquals(code, code_unlock))
+    {
+        if (device_state == STATE_UNLOCK_INPUT)
+        {
+            idle_seconds = 0;
+            TryUnlock();
+        }
+        return;
+    }
+
     if (device_state == STATE_UNLOCK_INPUT)
     {
-        if (!IsMasterCode(code))
+        idle_seconds = 0;
+        if (IsReservedCode(code))
+            return;
+        if (unlock_frame_count >= MAX_MASTER_KEY_FRAMES)
         {
             LockDatabase();
             return;
         }
-        if (unlock_frame_count < UNLOCK_FRAME_COUNT)
-        {
-            memcpy(&unlock_frames[(WORD)unlock_frame_count * 4u], code, 4u);
-            unlock_frame_count++;
-        }
-        if (unlock_frame_count == UNLOCK_FRAME_COUNT)
-            TryUnlock();
+        unlock_frames[(WORD)unlock_frame_count * 2u] = code[0];
+        unlock_frames[(WORD)unlock_frame_count * 2u + 1u] = code[2];
+        unlock_frame_count++;
         return;
     }
 
@@ -660,7 +710,10 @@ static void HandleReceivedCode(const BYTE *code)
 
     slot = PasswordSlotForCode(code);
     if (slot)
+    {
         StartPasswordOutput(slot);
+        idle_seconds = 0;
+    }
 }
 
 static void ProcessReceivedFrame(void)
@@ -684,20 +737,14 @@ static void ProcessTimers(void)
         return;
     second_tick_pending = 0;
 
-    if (device_state == STATE_UNLOCK_INPUT)
-    {
-        if (unlock_elapsed_seconds < UNLOCK_TIMEOUT_SECONDS)
-            unlock_elapsed_seconds++;
-        if (unlock_elapsed_seconds >= UNLOCK_TIMEOUT_SECONDS)
-            LockDatabase();
-    }
-    else if (device_state == STATE_UNLOCKED)
+    if (device_state == STATE_UNLOCK_INPUT || device_state == STATE_UNLOCKED)
     {
         if (idle_seconds < AUTO_LOCK_SECONDS)
             idle_seconds++;
         if (idle_seconds >= AUTO_LOCK_SECONDS)
             LockDatabase();
     }
+    UpdateStatusLed();
 }
 
 static BYTE CharacterToUsage(BYTE character, BYTE *modifier, BYTE *usage)

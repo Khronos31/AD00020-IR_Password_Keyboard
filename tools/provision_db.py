@@ -12,39 +12,33 @@ from pathlib import Path
 from typing import Mapping
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.cmac import CMAC
 
 
 SLOT_COUNT = 12
+MASTER_KEY_SIZE = 16
 MAX_PASSWORD_LENGTH = 63
 HEADER_SIZE = 16
 RECORD_SIZE = 64
 CRC_SIZE = 4
 MAGIC = b"ADPK"
-VERSION = 1
+VERSION = 2
 PLAINTEXT_SIZE = HEADER_SIZE + SLOT_COUNT * RECORD_SIZE + CRC_SIZE
 
 _DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+?)\s*$")
 _STRING_RE = re.compile(r'^"(?:[^"\\]|\\.)*"$')
 _SLOT_RE = re.compile(r"^AD00020_PASSWORD_SLOT_(0[1-9]|1[0-2])$")
-_MASTER_KEY_MACROS = tuple(f"AD00020_MASTER_KEY_{index:02d}" for index in range(1, 5))
-_ALLOWED_MASTER_KEY_VALUES = {
-    "01FE7887",
-    "01FE807F",
-    "01FE40BF",
-    "01FEC03F",
-    "01FE20DF",
-    "01FEA05F",
-    "01FE609F",
-    "01FEE01F",
-    "01FE10EF",
-    "01FE906F",
-    "01FE50AF",
-    "01FED827",
-    "01FEF807",
-    "01FE30CF",
-    "01FEB04F",
-    "01FE708F",
-}
+MAX_MASTER_KEY_FRAMES = 32
+KDF_DOMAIN = b"ADPK-MASTER-KEY-V2"
+KDF_KEY = b"ADPK-KDF-V2\0\0\0\0\0"
+MASTER_KEY_COUNT_MACROS = (
+    "AD00020_MASTER_KEY_COUNT",
+    "AD00020_MASTER_KEY_FRAME_COUNT",
+)
+LEGACY_MASTER_KEY_MACROS = tuple(
+    f"AD00020_MASTER_KEY_{index:02d}" for index in range(1, 5)
+)
+RESERVED_MASTER_KEY_VALUES = {"01FE7887", "01FE48B7", "01FE58A7"}
 
 
 class ProvisionError(ValueError):
@@ -103,25 +97,59 @@ def load_passwords(path: Path) -> list[str]:
     return passwords
 
 
+def is_valid_nec_frame(value: str) -> bool:
+    if not re.fullmatch(r"[0-9A-Fa-f]{8}", value):
+        return False
+    frame = bytes.fromhex(value)
+    return (frame[0] ^ frame[1]) == 0xFF and (frame[2] ^ frame[3]) == 0xFF
+
+
 def parse_master_key(value: str) -> bytes:
     parts = [part for part in re.split(r"[,:;\s]+", value.strip()) if part]
-    if len(parts) != 4 or any(not re.fullmatch(r"[0-9A-Fa-f]{8}", part) for part in parts):
-        raise ProvisionError("master key must contain four 8-hex-digit NEC values")
+    if len(parts) > MAX_MASTER_KEY_FRAMES:
+        raise ProvisionError("master key must contain 0 to 32 NEC values")
+    for part in parts:
+        normalized = part.upper()
+        if not is_valid_nec_frame(normalized):
+            raise ProvisionError(f"invalid standard NEC frame: {part}")
+        if normalized in RESERVED_MASTER_KEY_VALUES:
+            raise ProvisionError(f"reserved control code cannot be master-key material: {part}")
     return b"".join(bytes.fromhex(part) for part in parts)
+
+
+def derive_master_key(frames: bytes) -> bytes:
+    if len(frames) % 4 or len(frames) // 4 > MAX_MASTER_KEY_FRAMES:
+        raise ProvisionError("master key must contain 0 to 32 complete NEC frames")
+    count = len(frames) // 4
+    cmac = CMAC(algorithms.AES(KDF_KEY))
+    cmac.update(KDF_DOMAIN + bytes((count,)) + frames)
+    return cmac.finalize()
 
 
 def load_master_key(path: Path) -> bytes:
     defines = parse_defines(path)
+    count_values = [defines[name] for name in MASTER_KEY_COUNT_MACROS if name in defines]
+    if count_values:
+        if len(count_values) > 1 and count_values[0] != count_values[1]:
+            raise ProvisionError("master key count macros disagree")
+        try:
+            count = int(count_values[0], 10)
+        except ValueError as exc:
+            raise ProvisionError("master key count must be an integer") from exc
+    elif all(name in defines for name in LEGACY_MASTER_KEY_MACROS):
+        # v0.1 headers were fixed at four frames.  Accept them as a migration
+        # path, while new headers should always declare an explicit count.
+        count = len(LEGACY_MASTER_KEY_MACROS)
+    else:
+        raise ProvisionError("master key header must define AD00020_MASTER_KEY_COUNT")
+    if not 0 <= count <= MAX_MASTER_KEY_FRAMES:
+        raise ProvisionError("master key count must be between 0 and 32")
+
     values: list[str] = []
-    for name in _MASTER_KEY_MACROS:
-        value = resolve_string(name, defines)
-        normalized = value.upper()
-        if not re.fullmatch(r"[0-9A-F]{8}", normalized):
-            raise ProvisionError(f"master key macro is not an 8-hex-digit NEC value: {name}")
-        if normalized not in _ALLOWED_MASTER_KEY_VALUES:
-            raise ProvisionError(f"master key macro is not an allowed NEC command: {name}")
-        values.append(normalized)
-    return parse_master_key(" ".join(values))
+    for index in range(1, count + 1):
+        name = f"AD00020_MASTER_KEY_{index:02d}"
+        values.append(resolve_string(name, defines))
+    return derive_master_key(parse_master_key(" ".join(values)))
 
 
 def build_plaintext(passwords: list[str]) -> bytes:
@@ -174,7 +202,7 @@ def render_header(iv: bytes, ciphertext: bytes) -> str:
 #ifndef AD00020_GENERATED_DATABASE_H
 #define AD00020_GENERATED_DATABASE_H
 
-#define ADPK_DB_VERSION 1
+#define ADPK_DB_VERSION 2
 #define ADPK_DB_SLOT_COUNT 12
 #define ADPK_DB_MAX_PASSWORD_LENGTH 63
 #define ADPK_DB_HEADER_SIZE 16
@@ -213,7 +241,7 @@ def main() -> int:
         "--master-key-header",
         type=Path,
         default=Path("include/master_key.h"),
-        help="local header containing the four NEC master-key values",
+        help="local header containing the variable-length NEC master-key sequence",
     )
     args = parser.parse_args()
     try:

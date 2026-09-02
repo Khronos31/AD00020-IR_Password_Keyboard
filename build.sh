@@ -27,6 +27,7 @@ cd "$PROJECT_DIR/src"
   -o "$BUILD_DIR/AD00020-IR-Password-Keyboard.hex" \
   main.c usb_descriptors.c \
   crypto/aes.c \
+  crypto/cmac.c \
   Microchip/USB/usb_device.c \
   "Microchip/USB/HID Device Driver/usb_function_hid.c"
 
