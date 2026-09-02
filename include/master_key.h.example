@@ -1,8 +1,9 @@
 /*
  * Local-only master-key configuration.
  *
- * Set an explicit frame count from 0 through 32, then enter that many
- * standard NEC values in order, using eight hexadecimal digits per value.
+ * Enter zero through 32 standard NEC values in order as one string.  Values
+ * may be concatenated or separated by spaces, commas, colons, or semicolons;
+ * each value is exactly eight hexadecimal digits.
  * Do not include the "NEC-" prefix.  Mode, ON, and OFF are reserved control
  * commands and cannot be used as master-key material.  Any other valid
  * standard NEC frame is accepted, including frames from another remote.
@@ -13,11 +14,6 @@
 #ifndef AD00020_MASTER_KEY_H
 #define AD00020_MASTER_KEY_H
 
-#define AD00020_MASTER_KEY_COUNT 4
-
-#define AD00020_MASTER_KEY_01 "01FE807F"
-#define AD00020_MASTER_KEY_02 "01FE40BF"
-#define AD00020_MASTER_KEY_03 "A55A12ED"
-#define AD00020_MASTER_KEY_04 "10EF55AA"
+#define AD00020_MASTER_KEY_SEQUENCE "01FE807F 01FE40BF A55A12ED 10EF55AA"
 
 #endif /* AD00020_MASTER_KEY_H */

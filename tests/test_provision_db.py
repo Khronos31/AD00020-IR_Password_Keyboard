@@ -41,6 +41,10 @@ class ProvisionDatabaseTests(unittest.TestCase):
             provision_db.parse_master_key("A55A12ED 10EF55AA"),
             bytes.fromhex("A55A12ED10EF55AA"),
         )
+        self.assertEqual(
+            provision_db.parse_master_key("A55A12ED10EF55AA"),
+            bytes.fromhex("A55A12ED10EF55AA"),
+        )
 
         self.assertEqual(provision_db.parse_master_key(""), b"")
 
@@ -71,11 +75,7 @@ class ProvisionDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "master_key.h"
             path.write_text(
-                '#define AD00020_MASTER_KEY_COUNT 4\n'
-                '#define AD00020_MASTER_KEY_01 "01FE807F"\n'
-                '#define AD00020_MASTER_KEY_02 "01FE40BF"\n'
-                '#define AD00020_MASTER_KEY_03 "A55A12ED"\n'
-                '#define AD00020_MASTER_KEY_04 "10EF55AA"\n',
+                '#define AD00020_MASTER_KEY_SEQUENCE "01FE807F 01FE40BF A55A12ED 10EF55AA"\n',
                 encoding="ascii",
             )
             self.assertEqual(
@@ -85,52 +85,20 @@ class ProvisionDatabaseTests(unittest.TestCase):
                 ),
             )
 
-            path.write_text(
-                '#define AD00020_MASTER_KEY_COUNT 0\n',
-                encoding="ascii",
-            )
+            path.write_text('#define AD00020_MASTER_KEY_SEQUENCE ""\n', encoding="ascii")
             self.assertEqual(
                 provision_db.load_master_key(path),
                 provision_db.derive_master_key(b""),
             )
 
             path.write_text(
-                '#define AD00020_MASTER_KEY_COUNT 33\n',
-                encoding="ascii",
-            )
-            with self.assertRaises(provision_db.ProvisionError):
-                provision_db.load_master_key(path)
-
-    def test_master_key_header_requires_only_the_declared_frames(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "master_key.h"
-            path.write_text(
                 '#define AD00020_MASTER_KEY_COUNT 2\n'
                 '#define AD00020_MASTER_KEY_01 "A55A12ED"\n'
                 '#define AD00020_MASTER_KEY_02 "10EF55AA"\n',
                 encoding="ascii",
             )
-            self.assertEqual(
-                provision_db.load_master_key(path),
-                provision_db.derive_master_key(bytes.fromhex("A55A12ED10EF55AA")),
-            )
-
-    def test_legacy_four_frame_header_is_migrated(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "master_key.h"
-            path.write_text(
-                '#define AD00020_MASTER_KEY_01 "01FE807F"\n'
-                '#define AD00020_MASTER_KEY_02 "01FE40BF"\n'
-                '#define AD00020_MASTER_KEY_03 "A55A12ED"\n'
-                '#define AD00020_MASTER_KEY_04 "10EF55AA"\n',
-                encoding="ascii",
-            )
-            self.assertEqual(
-                provision_db.load_master_key(path),
-                provision_db.derive_master_key(
-                    bytes.fromhex("01FE807F01FE40BFA55A12ED10EF55AA")
-                ),
-            )
+            with self.assertRaises(provision_db.ProvisionError):
+                provision_db.load_master_key(path)
 
     def test_generated_header_contains_no_plaintext(self):
         passwords = ["alpha", "b3ta!", "", "delta"] + [""] * 8

@@ -55,6 +55,7 @@ All listed values are the decoded NEC value in the existing scanner's `NEC-XXXXX
 - マスターキーは不揮発領域（PICフラッシュ、EEPROM、生成ヘッダー、ログ）へ配置しない。NECフレーム列を受信してONを受けた後にRAM上でKDFから生成し、電源断で自然に消失する。
 - ローカルの`include/credentials.h`はビルド時の入力であり、`.gitignore`対象。これはユーザーが管理する作業用平文である。
 - ローカルの`include/master_key.h`はプロビジョニング時の入力であり、`.gitignore`対象。生成DBやファームウェアにはコピーしない。
+- `master_key.h`の入力形式は`AD00020_MASTER_KEY_SEQUENCE`一つの文字列で、8桁の標準NEC値を0〜32個並べる。値は連結または区切り文字付きで記述できる。
 - `tools/provision_db.py`が`credentials.h`を読み、暗号化済みの`include/generated_database.h`を生成する。生成物も`.gitignore`対象とする。
 - データベース暗号化はAES-128-CTRとする。暗号化ごとにランダムな16バイトIVを生成し、IVは暗号文とともに保存する。
 - AES鍵は次の決定的KDFで生成する。`AES-CMAC(KDF_KEY, ASCII("ADPK-MASTER-KEY-V2") || count_byte || frame_1 || ... || frame_n)`の16バイトをAES-128鍵とする。`KDF_KEY`はASCII(`ADPK-KDF-V2`)にNUL 5バイトを加えた公開固定値、`count_byte`は0〜32のフレーム数、各frameはデコーダーが得た4バイトの標準NEC値を順番どおりに使う。空列はドメイン文字列とcount=0だけを入力する。これは鍵長を固定し、旧版の固定4フレーム連結との曖昧さを避けるドメイン分離KDFであるが、リモコン同時盗難時の強い総当たり耐性を提供するものではない。
