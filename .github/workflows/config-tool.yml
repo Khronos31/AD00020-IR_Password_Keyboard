@@ -1,0 +1,39 @@
+name: AD00020 configuration tool
+
+on:
+  push:
+    paths:
+      - "config-tool/**"
+      - ".github/workflows/config-tool.yml"
+  pull_request:
+    paths:
+      - "config-tool/**"
+      - ".github/workflows/config-tool.yml"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: config-tool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: config-tool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings

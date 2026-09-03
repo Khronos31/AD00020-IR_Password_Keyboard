@@ -27,3 +27,11 @@ remain the property of their respective owners.
 If Bit Trade One design materials are added in the future, their applicable
 Assembly Desk License notice must be retained separately. See the official
 license page: https://bit-trade-one.co.jp/adl/
+
+## Rust configuration tool
+
+The Rust configuration tool under `config-tool/` obtains its dependencies
+through Cargo; dependencies are not vendored in this repository. `config-tool/Cargo.lock`
+pins the resolved dependency versions. Binary distribution is blocked until
+all direct and transitive dependency licenses and required notices have been
+inventoried and packaged with the release.

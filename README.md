@@ -1,10 +1,36 @@
-# AD00020 IR Password Keyboard v0.2.0
+# AD00020 IR Password Keyboard v0.3.0
 
 AD00020を、赤外線入力をトリガーにした複数環境向けのUSB HIDパスワード入力デバイスとして利用するためのプロジェクトです。
 
 ## Status
 
-v0.2.0のプロビジョニングとファームウェア実装です。
+v0.2.0のプロビジョニングとファームウェアに、v0.3.0の設定TUI scaffoldを追加しています。
+
+## v0.3.0 configuration tool
+
+The Rust TUI can be launched from the repository root with:
+
+```sh
+cargo run --manifest-path config-tool/Cargo.toml
+```
+
+Use the arrow keys to move the `>` cursor and Enter to choose. Configuration
+changes are staged in memory until **Apply / Save Configuration** is selected.
+`Ctrl+C` discards the staged session and exits; `Ctrl+D` is input EOF only and
+is never a save operation.
+
+Scanning and applying are currently placeholders. Scanning reads one line from
+standard input, while Apply/Save writes JSON containing only public metadata
+such as keycodes, aliases, and fixed redaction metadata. It does not write
+password plaintext, password-derived values, password lengths, or a reversible
+placeholder. No native USB backend is included yet; see the
+[configuration-tool README](config-tool/README.md) for the detailed scope.
+
+The future native release is intended to contain one configuration-tool binary
+for each supported platform, the AD00020 firmware HEX, and the accompanying
+documentation and license notices. This v0.3 tool exposes 16 slots, whereas
+the current v0.2 firmware/database supports 12 slots. They are currently
+incompatible, and this tool does not provision the device yet.
 
 ## Related projects
 
