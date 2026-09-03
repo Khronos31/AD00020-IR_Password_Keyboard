@@ -346,6 +346,13 @@ fn selectable_line(selected: bool, label: &str) -> String {
     format!("{}{}", if selected { "> " } else { "  " }, label)
 }
 
+// Raw mode disables the Unix terminal's LF-to-CRLF output translation. Always
+// return to column zero explicitly so menu rows do not drift into a staircase.
+fn write_terminal_line<W: Write>(writer: &mut W, text: &str) -> io::Result<()> {
+    writer.write_all(text.as_bytes())?;
+    writer.write_all(b"\r\n")
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Main,
@@ -674,21 +681,21 @@ impl Tui {
             Clear(ClearType::All),
             crossterm::cursor::MoveTo(0, 0)
         )?;
-        writeln!(stdout, "{APP_TITLE}")?;
-        writeln!(stdout)?;
-        writeln!(stdout, "{}", self.screen_title())?;
-        writeln!(stdout)?;
+        write_terminal_line(&mut stdout, APP_TITLE)?;
+        write_terminal_line(&mut stdout, "")?;
+        write_terminal_line(&mut stdout, self.screen_title())?;
+        write_terminal_line(&mut stdout, "")?;
         if !self.status.is_empty() {
-            writeln!(stdout, "{}", self.safe_public_text(&self.status))?;
-            writeln!(stdout)?;
+            write_terminal_line(&mut stdout, &self.safe_public_text(&self.status))?;
+            write_terminal_line(&mut stdout, "")?;
         }
         for (index, label) in self.labels().iter().enumerate() {
-            writeln!(stdout, "{}", selectable_line(index == self.selected, label))?;
+            write_terminal_line(&mut stdout, &selectable_line(index == self.selected, label))?;
         }
-        writeln!(stdout)?;
-        writeln!(
-            stdout,
-            "Arrow keys: select    Enter: choose    Ctrl+C: discard and exit"
+        write_terminal_line(&mut stdout, "")?;
+        write_terminal_line(
+            &mut stdout,
+            "Arrow keys: select    Enter: choose    Ctrl+C: discard and exit",
         )?;
         stdout.flush()?;
         Ok(())
@@ -930,6 +937,18 @@ mod tests {
     fn selectable_lines_have_a_single_leading_cursor() {
         assert_eq!(selectable_line(true, "Apply"), "> Apply");
         assert_eq!(selectable_line(false, "Cancel"), "  Cancel");
+    }
+
+    #[test]
+    fn raw_mode_lines_use_crlf_instead_of_bare_lf() {
+        let mut output = Vec::new();
+        write_terminal_line(&mut output, "Main menu").expect("line should render");
+        write_terminal_line(&mut output, "> Exit").expect("line should render");
+        assert_eq!(output, b"Main menu\r\n> Exit\r\n");
+        assert!(output
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| *byte != b'\n' || (index > 0 && output[index - 1] == b'\r')));
     }
 
     #[test]
